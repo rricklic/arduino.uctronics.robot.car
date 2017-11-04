@@ -30,15 +30,15 @@ volatile long distCalcStartTime = 0;
 #define BACKWARD 2
 #define BRAKE 3
 #define RELEASE 4
-#define MOTOR_MOVE_FORWARD 1
-#define MOTOR_MOVE_BACKWARD 0
 #define MAX_PWM 255
 #define MIN_PWM 0
 #define NO_PWM -1
+#define LEFT_MOTOR 3
+#define RIGHT_MOTOR 4
 
 //SG90 9G Mini Servo (5V)
 #define SERVO_PIN 10
-//#define SERVO2_PIN 9 (not used)
+//#define SERVO2_PIN 9 (not used... yet)
 
 Servo servo;
 
@@ -49,6 +49,16 @@ void setup()
    pinMode(SONAR_ECHO_PIN, INPUT);
    //interrupt when SONAR_ECHO_PIN changes; used instead of pulseIn(SONAR_ECHO_PIN, HIGH);
    attachInterrupt(SONAR_INTERRUPT, calculateDistance, CHANGE);
+
+   //L293D Motor Drive - shift register
+   pinMode(SHIFTREG_LATCH_PIN, OUTPUT);
+   pinMode(SHIFTREG_ENABLE_PIN, OUTPUT);
+   pinMode(SHIFTREG_DATA_PIN, OUTPUT);
+   pinMode(SHIFTREG_CLK_PIN, OUTPUT);
+   digitalWrite(SHIFTREG_DATA_PIN, LOW);
+   digitalWrite(SHIFTREG_LATCH_PIN, LOW);
+   digitalWrite(SHIFTREG_CLK_PIN, LOW);
+   digitalWrite(SHIFTREG_ENABLE_PIN, LOW);
      
    //SG90
    servo.attach(SERVO_PIN);
@@ -140,23 +150,7 @@ void setMotorOutput(int output, int highOrLow, int speed)
 
 void shiftWrite(int output, int highOrLow)
 {
-  static int latchCopy;
-  static bool isShiftRegisterInit = false;
-
-  if(!isShiftRegisterInit) {
-    pinMode(SHIFTREG_LATCH_PIN, OUTPUT);
-    pinMode(SHIFTREG_ENABLE_PIN, OUTPUT);
-    pinMode(SHIFTREG_DATA_PIN, OUTPUT);
-    pinMode(SHIFTREG_CLK_PIN, OUTPUT);
-
-    digitalWrite(SHIFTREG_DATA_PIN, LOW);
-    digitalWrite(SHIFTREG_LATCH_PIN, LOW);
-    digitalWrite(SHIFTREG_CLK_PIN, LOW);
-    digitalWrite(SHIFTREG_ENABLE_PIN, LOW);
-
-    latchCopy = 0;
-    isShiftRegisterInit = true;
-  }
+  static int latchCopy = 0;
 
   bitWrite(latchCopy, output, highOrLow);
 
@@ -169,6 +163,36 @@ void shiftWrite(int output, int highOrLow)
   digitalWrite(SHIFTREG_LATCH_PIN, HIGH);
   delayMicroseconds(5);
   digitalWrite(SHIFTREG_LATCH_PIN, LOW);
+}
+
+void moveForward(int speed)
+{
+   moveMotor(LEFT_MOTOR, FORWARD, speed);
+   moveMotor(RIGHT_MOTOR, FORWARD, speed);
+}
+
+void moveBackward(int speed)
+{
+   moveMotor(LEFT_MOTOR, BACKWARD, speed);
+   moveMotor(RIGHT_MOTOR, BACKWARD, speed);
+}
+
+void turnLeft(int speed)
+{
+   moveMotor(LEFT_MOTOR, BACKWARD, speed);
+   moveMotor(RIGHT_MOTOR, FORWARD, speed);
+}
+
+void turnRight(int speed)
+{
+   moveMotor(LEFT_MOTOR, FORWARD, speed);
+   moveMotor(RIGHT_MOTOR, BACKWARD, speed);
+}
+
+void stopMoving()
+{
+   moveMotor(LEFT_MOTOR, RELEASE, MIN_PWM);
+   moveMotor(RIGHT_MOTOR, RELEASE, MIN_PWM);
 }
 
 void moveServo(int angle)
@@ -214,10 +238,6 @@ long calculateDistanceNow()
 
 void loop()
 {
-   //Move servo 60 to 120 degress; scan for obstacle
-   //int angle = 60 + (sin(millis()/250.0)+1) * 30.0;
-   //moveServo(angle);
-
    //Calculate distance
    Serial.print("Distance: ");
    Serial.println(distance);
@@ -225,51 +245,43 @@ void loop()
       startDistanceCalculation();
    }
 
-   if(distance > 20) {
-      //Move forward
-      moveMotor(3, FORWARD, MAX_PWM);
-      moveMotor(4, FORWARD, MAX_PWM);
+   if(distance > 40) {
+      //No obstacles detected - full speed ahead!
+      moveForward(MAX_PWM);
+      delay(15);
+   }
+   else if(distance <= 40 && distance > 20) {
+      //Upcoming obstacle detected - slow down
+      moveForward(MAX_PWM/2);
       delay(15);
    }
    else {
-      //Detcted obstacle
-
-      //Stop moving
-      moveMotor(3, RELEASE, MIN_PWM);
-      moveMotor(4, RELEASE, MIN_PWM);
+      //Detcted obstacle way too close for comfort - backup and turn
+      stopMoving();
 
       //Scan area
       moveServo(120);
-      delay(1000);
+      delay(250);
       long leftDist = calculateDistanceNow();
       moveServo(60);
-      delay(1000);
+      delay(250);
       long rightDist = calculateDistanceNow();
       moveServo(90);
     
-      //Move backwards
-      moveMotor(3, BACKWARD, MAX_PWM);
-      moveMotor(4, BACKWARD, MAX_PWM);
+      moveBackward(MAX_PWM);
       delay(500);
 
-      moveMotor(3, RELEASE, MIN_PWM);
-      moveMotor(4, RELEASE, MIN_PWM);
-
-      if(leftDist <= rightDist) {
-        //Turn to the left
-        moveMotor(3, BACKWARD, MAX_PWM);
-        moveMotor(4, FORWARD, MAX_PWM);
+      if(leftDist >= rightDist) {
+        turnLeft(MAX_PWM);
       }
       else {
-        //Turn to the right
-        moveMotor(3, FORWARD, MAX_PWM);
-        moveMotor(4, BACKWARD, MAX_PWM);
-        
+        turnRight(MAX_PWM);
       }
       delay(350);
 
-      moveMotor(3, RELEASE, MIN_PWM);
-      moveMotor(4, RELEASE, MIN_PWM);
+      stopMoving();
+      calculateDistanceNow();
+
       delay(15);
    }
 }
